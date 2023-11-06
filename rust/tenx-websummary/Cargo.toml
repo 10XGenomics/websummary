@@ -1,0 +1,50 @@
+[package]
+name = "tenx-websummary"
+version = "0.1.0"
+authors = ["10x Genomics"]
+license-file = "../../LICENSE"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1"
+regex = { version = ">=1.5.5", default-features = false, features = [
+    "std",
+    "perf",
+    "unicode-perl",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+tenx-websummary-derive = { path = "../tenx-websummary-derive", optional = true }
+itertools = ">=0.10"
+
+# Support encoding image as base64
+base64 = { version = ">= 0.12, < 0.21", optional = true }
+
+# Support basic image processing (resize etc)
+image = { version = "0.24.7", default-features = false, features = [
+    "jpeg",
+    "png",
+], optional = true }
+
+# Implement Responder for HtmlTemplate types
+actix-web = { version = ">=4", default-features = false, optional = true }
+tracing = { version = "0.1", default-features = false, optional = true }
+bytesize = { version = "1.2", default-features = false, optional = true }
+
+# To convert a csv file to a generic table
+csv = { version = "1.2.2", optional = true }
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+insta = { version = "1.31.0", features = ["ron"] }
+
+[features]
+default = ["derive"]
+generate_html = []
+derive = ["tenx-websummary-derive"]
+image_base64_encode = ["dep:base64"]
+image_proc = ["dep:image"]
+csv_table = ["dep:csv"]
+actix = ["dep:actix-web", "dep:tracing", "dep:bytesize", "generate_html"]
+form = ["dep:csv", "derive"]

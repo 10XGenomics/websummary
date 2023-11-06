@@ -1,0 +1,8 @@
+[workspace]
+members = ["rust/tenx-websummary", "rust/tenx-websummary-derive"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+debug = 1
+lto = true
