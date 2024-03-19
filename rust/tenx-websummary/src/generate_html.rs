@@ -87,7 +87,7 @@ pub fn generate_html_summary_with_build_files<P, W>(
         script_js,
         styles_css,
         template_html,
-    }: WebSummaryBuildFiles,
+    }: WebSummaryBuildFiles<'_>,
 ) -> Result<(), Error>
 where
     P: AsRef<Path>,

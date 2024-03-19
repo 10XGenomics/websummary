@@ -5,6 +5,8 @@
 /// Code to generate html from the json data
 pub mod generate_html;
 
+use std::collections::HashMap;
+
 #[cfg(feature = "generate_html")]
 pub use generate_html::generate_html_summary;
 
@@ -13,12 +15,13 @@ pub use generate_html::{
 };
 
 use components::WsNavBar;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "derive")]
 #[allow(unused_imports)]
 #[macro_use]
 extern crate tenx_websummary_derive;
+use serde_json::Value;
 #[cfg(feature = "derive")]
 #[doc(hidden)]
 pub use tenx_websummary_derive::*;
@@ -82,9 +85,48 @@ pub struct SinglePageHtml<P> {
     alerts: Alerts,
     #[serde(skip)]
     config: SinglePageConfig,
+    #[serde(default, rename = "_resources")]
+    resources: SharedResources,
 }
 
-#[derive(Debug, Clone, Serialize)]
+pub const RESOURCES_PREFIX: &str = "_resources";
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SharedResources(pub HashMap<String, Value>);
+
+impl SharedResources {
+    pub fn new() -> Self {
+        SharedResources::default()
+    }
+    pub fn insert(&mut self, value: Value) -> String {
+        // Check if the value is already in the map
+        let key = match self
+            .0
+            .iter()
+            .find_map(|(key, val)| (val == &value).then(|| key.clone()))
+        {
+            Some(key) => key,
+            None => {
+                let key = format!("{:03}", self.0.len());
+                self.0.insert(key.clone(), value);
+                key
+            }
+        };
+        format!("{}_{}", RESOURCES_PREFIX, key)
+    }
+}
+
+pub trait AddToSharedResource {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources);
+    fn with_shared_resource(mut self, shared_resource: &mut SharedResources) -> Self
+    where
+        Self: Sized,
+    {
+        self.add_to_shared_resource(shared_resource);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum AlertLevel {
     Error,
@@ -92,18 +134,18 @@ pub enum AlertLevel {
     Info,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alert {
     pub level: AlertLevel,
     pub title: String,
-    pub formatted_value: String,
+    pub formatted_value: Option<String>,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default, Deserialize)]
 pub struct Alerts {
     #[serde(rename = "alarms")]
-    alerts: Vec<Alert>,
+    pub alerts: Vec<Alert>,
 }
 
 impl<P> SinglePageHtml<P> {
@@ -113,6 +155,7 @@ impl<P> SinglePageHtml<P> {
             alerts: Alerts::default(),
             content,
             config: SinglePageConfig::default(),
+            resources: SharedResources::new(),
         }
     }
     pub fn nav_bar(mut self, nav_bar: WsNavBar) -> Self {
@@ -131,10 +174,15 @@ impl<P> SinglePageHtml<P> {
                 alerts: alerts.unwrap_or_default(),
             },
             config: SinglePageConfig::default(),
+            resources: SharedResources::new(),
         }
     }
     pub fn full_width(mut self) -> Self {
         self.config = self.config.full_width();
+        self
+    }
+    pub fn resources(mut self, resources: SharedResources) -> Self {
+        self.resources = resources;
         self
     }
 }
@@ -180,7 +228,7 @@ impl<P: Serialize + HtmlTemplate> SinglePageHtml<P> {
     pub fn generate_html_with_build_files<W: std::io::Write>(
         self,
         writer: W,
-        build_files: WebSummaryBuildFiles,
+        build_files: WebSummaryBuildFiles<'_>,
     ) -> Result<(), anyhow::Error> {
         let json_data = serde_json::to_string(&self)?;
 
@@ -196,7 +244,7 @@ impl<P: Serialize + HtmlTemplate> SinglePageHtml<P> {
     pub fn generate_html_file_with_build_files(
         self,
         file: impl AsRef<std::path::Path>,
-        build_files: WebSummaryBuildFiles,
+        build_files: WebSummaryBuildFiles<'_>,
     ) -> Result<(), anyhow::Error> {
         let writer = std::io::BufWriter::new(std::fs::File::create(file)?);
         self.generate_html_with_build_files(writer, build_files)

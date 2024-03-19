@@ -1,4 +1,4 @@
-error: HtmlTemplate can only be derived for structs with named fields. Unsupported shape `enum`
+error: HtmlTemplate can only be derived for structs with named fields. Unsupported shape `enum`. Expected struct with named fields.
  --> tests/ui_derive_html/derive_unsupported.rs:3:10
   |
 3 | #[derive(HtmlTemplate)]
@@ -6,7 +6,7 @@ error: HtmlTemplate can only be derived for structs with named fields. Unsupport
   |
   = note: this error originates in the derive macro `HtmlTemplate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: HtmlTemplate can only be derived for structs with named fields. Unsupported shape `newtype`
+error: HtmlTemplate can only be derived for structs with named fields. Unsupported shape `one unnamed field`. Expected named fields.
  --> tests/ui_derive_html/derive_unsupported.rs:8:10
   |
 8 | #[derive(HtmlTemplate)]

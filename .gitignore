@@ -17,7 +17,10 @@ __pycache__/
 
 .DS_Store
 
-/bazel-*/
+/bazel-*
+
+# Only present during CI
+WORKSPACE
 
 #Added by cargo
 #

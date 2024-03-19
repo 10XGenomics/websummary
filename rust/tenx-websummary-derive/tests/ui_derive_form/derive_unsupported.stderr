@@ -1,4 +1,4 @@
-error: HtmlForm can only be derived for structs with named fields or enum with unit variants. Unsupported shape `named`
+error: HtmlForm can only be derived for structs with named fields or enum with unit variants. Unsupported shape `named fields`. Expected no fields.
  --> tests/ui_derive_form/derive_unsupported.rs:3:10
   |
 3 | #[derive(HtmlForm)]
@@ -6,7 +6,7 @@ error: HtmlForm can only be derived for structs with named fields or enum with u
   |
   = note: this error originates in the derive macro `HtmlForm` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: HtmlForm can only be derived for structs with named fields or enum with unit variants. Unsupported shape `newtype`
+error: HtmlForm can only be derived for structs with named fields or enum with unit variants. Unsupported shape `one unnamed field`. Expected no fields.
  --> tests/ui_derive_form/derive_unsupported.rs:9:10
   |
 9 | #[derive(HtmlForm)]
@@ -14,7 +14,7 @@ error: HtmlForm can only be derived for structs with named fields or enum with u
   |
   = note: this error originates in the derive macro `HtmlForm` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: HtmlForm can only be derived for structs with named fields or enum with unit variants. Unsupported shape `newtype`
+error: HtmlForm can only be derived for structs with named fields or enum with unit variants. Unsupported shape `one unnamed field`. Expected named fields.
   --> tests/ui_derive_form/derive_unsupported.rs:15:10
    |
 15 | #[derive(HtmlForm)]

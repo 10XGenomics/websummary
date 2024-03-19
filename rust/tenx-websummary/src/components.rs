@@ -17,16 +17,31 @@
 //! | RawImage | RawImage.js |
 //! | BlendedImage | ImageRegistViewer.js |
 //! | VegaLitePlot | VegaLitePlot.js |
+//! | Tooltip | ReactTooltip.js |
 //!
 
 use std::{collections::HashMap, fmt::Display, marker::PhantomData};
 
 use anyhow::Error;
 use itertools::Itertools;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{react_component, HtmlTemplate};
+use crate::{react_component, AddToSharedResource, HtmlTemplate, SharedResources};
+
+impl HtmlTemplate for String {
+    fn template(&self, _data_key: Option<String>) -> String {
+        self.clone()
+    }
+}
+
+fn join_data_key(data_key: &Option<String>, key: &str) -> String {
+    match data_key {
+        Some(prefix) => format!("{prefix}.{key}"),
+        None => key.into(),
+    }
+}
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 /// Threshold for the hero metric which determines the color
@@ -163,12 +178,26 @@ impl GenericTable {
     }
 }
 
+fn deserialize_tuple_list_as_string<'de, D>(
+    deserializer: D,
+) -> Result<Vec<(String, String)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Vec<(NumOrStr, NumOrStr)> = serde::de::Deserialize::deserialize(deserializer)?;
+    Ok(value
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect())
+}
+
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 /// A table containing two columns and no header, typically used to show a list
 /// of metrics. The left column is the name and the right column is the value.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TableMetric {
     /// Vector of (metric name, metric value)
+    #[serde(deserialize_with = "deserialize_tuple_list_as_string")]
     pub rows: Vec<(String, String)>,
 }
 
@@ -224,6 +253,86 @@ impl PlotlyChart {
 }
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// A tooltip that appears on hover of the underlying `content`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Tooltip {
+    pub id: String,
+    pub tooltip: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<TooltipVariant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<TooltipPlace>,
+}
+
+impl Tooltip {
+    /// Create a tooltip with a generated ID. If you are creating multiple
+    /// tooltips which will not be displayed simultaneously, you should prefer
+    /// `Tooltip::new_with_id` and re-use the same ID.
+    pub fn new(
+        tooltip: impl Into<String>,
+        content: impl Into<String>,
+        variant: Option<TooltipVariant>,
+        place: Option<TooltipPlace>,
+    ) -> Self {
+        let mut rng = rand::thread_rng();
+        let id = format!("tt-{}", rng.gen::<u16>());
+
+        Self::new_with_id(id, tooltip, content, variant, place)
+    }
+
+    pub fn new_with_id(
+        id: impl Into<String>,
+        tooltip: impl Into<String>,
+        content: impl Into<String>,
+        variant: Option<TooltipVariant>,
+        place: Option<TooltipPlace>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            tooltip: tooltip.into(),
+            content: content.into(),
+            variant,
+            place,
+        }
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// The tooltip variant
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TooltipVariant {
+    #[default]
+    Dark,
+    Light,
+    Success,
+    Warning,
+    Error,
+    Info,
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// The place to anchor a tooltip
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TooltipPlace {
+    #[default]
+    Top,
+    TopStart,
+    TopEnd,
+    Right,
+    RightStart,
+    RightEnd,
+    Bottom,
+    BottomStart,
+    BottomEnd,
+    Left,
+    LeftStart,
+    LeftEnd,
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 /// Vega lite plot
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct VegaLitePlot {
@@ -231,6 +340,16 @@ pub struct VegaLitePlot {
     pub actions: Option<Value>,
     #[serde(default)]
     pub renderer: Option<VegaLiteRenderer>,
+}
+
+impl VegaLitePlot {
+    pub fn from_json_str(json_str: &str) -> Result<Self, Error> {
+        Ok(VegaLitePlot {
+            spec: serde_json::from_str(json_str)?,
+            actions: None,
+            renderer: None,
+        })
+    }
 }
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -294,8 +413,18 @@ pub struct MinMax<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitialZoomPan {
+    pub scale: Option<f64>,
+    pub dx: Option<f64>,
+    pub dy: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageZoomPan {
     scale_limits: MinMax<f64>,
+    initial: Option<InitialZoomPan>,
+    height: Option<u32>,
+    width: Option<u32>,
 }
 
 impl ImageZoomPan {
@@ -305,7 +434,22 @@ impl ImageZoomPan {
                 min: min_scale,
                 max: max_scale,
             },
+            initial: None,
+            height: None,
+            width: None,
         }
+    }
+    pub fn height(mut self, height: u32) -> Self {
+        self.height = Some(height);
+        self
+    }
+    pub fn width(mut self, width: u32) -> Self {
+        self.width = Some(width);
+        self
+    }
+    pub fn initial(mut self, initial: InitialZoomPan) -> Self {
+        self.initial = Some(initial);
+        self
     }
 }
 
@@ -378,12 +522,7 @@ impl RawImage {
         self
     }
     pub fn zoomable(mut self, min_scale: f64, max_scale: f64) -> Self {
-        self.zoom_pan = Some(ImageZoomPan {
-            scale_limits: MinMax {
-                min: min_scale,
-                max: max_scale,
-            },
-        });
+        self.zoom_pan = Some(ImageZoomPan::with_scale_limits(min_scale, max_scale));
         self
     }
 }
@@ -394,18 +533,32 @@ pub struct DropdownOption<T> {
     pub name: String,
     pub component: T,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CssAlign {
+    #[default]
+    Left,
+    Right,
+    Center,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DropdownSelectorProps {
+    pub label: Option<String>,
+    pub align: CssAlign,
+}
+
 /// Dropdown to toggle between different options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropdownSelector<T> {
+    pub props: DropdownSelectorProps,
     pub options: Vec<DropdownOption<T>>,
 }
 
 impl<T: HtmlTemplate> HtmlTemplate for DropdownSelector<T> {
     fn template(&self, data_key: Option<String>) -> String {
-        let base_data_key = match data_key {
-            Some(key) => format!("{key}.options"),
-            None => "options".into(),
-        };
+        let base_data_key = join_data_key(&data_key, "options");
         let inner = self
             .options
             .iter()
@@ -420,7 +573,58 @@ impl<T: HtmlTemplate> HtmlTemplate for DropdownSelector<T> {
                 )
             })
             .join("\n");
-        format!(r#"<div data-component="DropdownSelector">{inner}</div>"#)
+        let props_data_key = join_data_key(&data_key, "props");
+        format!(
+            r#"<div data-key="{props_data_key}" data-component="DropdownSelector">{inner}</div>"#
+        )
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ButtonSelectorOption<T> {
+    pub name: String,
+    pub component: T,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ButtonSelectoryType {
+    #[default]
+    FullWidth,
+    Compact,
+    Separated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ButtonSelectorProps {
+    #[serde(rename = "type")]
+    pub ty: ButtonSelectoryType,
+}
+
+/// Button to toggle between different options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ButtonSelector<T> {
+    pub props: ButtonSelectorProps,
+    pub options: Vec<ButtonSelectorOption<T>>,
+}
+
+impl<T: HtmlTemplate> HtmlTemplate for ButtonSelector<T> {
+    fn template(&self, data_key: Option<String>) -> String {
+        let base_data_key = join_data_key(&data_key, "options");
+        let inner = self
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, option)| {
+                let this_inner = option
+                    .component
+                    .template(Some(format!("{base_data_key}[{i}].component")));
+                format!(r#"<div name="{}">{this_inner}</div>"#, option.name)
+            })
+            .join("\n");
+        let props_data_key = join_data_key(&data_key, "props");
+        format!(r#"<div data-key="{props_data_key}" data-component="ButtonSelector">{inner}</div>"#)
     }
 }
 
@@ -442,6 +646,15 @@ impl<'a> From<&'a str> for NumOrStr {
 impl From<usize> for NumOrStr {
     fn from(value: usize) -> Self {
         NumOrStr::Num(value)
+    }
+}
+
+impl Display for NumOrStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NumOrStr::Num(n) => write!(f, "{}", n),
+            NumOrStr::Str(s) => write!(f, "{}", s),
+        }
     }
 }
 
@@ -474,12 +687,30 @@ pub struct BlendedImage {
     pub slider_title: Option<String>,
 }
 
+impl AddToSharedResource for BlendedImage {
+    fn add_to_shared_resource(&mut self, resources: &mut SharedResources) {
+        self.image1 = resources.insert(Value::String(self.image1.clone()));
+        self.image2 = resources.insert(Value::String(self.image2.clone()));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlendedImageZoomable {
     #[serde(flatten)]
     blended_image: BlendedImage,
+    #[serde(rename = "imgATransform")]
+    image1_transform: Option<Vec<f64>>,
+    #[serde(rename = "imgBTransform")]
+    image2_transform: Option<Vec<f64>>,
     img_props: ImageProps,
     zoom_pan: ImageZoomPan,
+    slider_top: Option<bool>,
+}
+
+impl AddToSharedResource for BlendedImageZoomable {
+    fn add_to_shared_resource(&mut self, resources: &mut SharedResources) {
+        self.blended_image.add_to_shared_resource(resources);
+    }
 }
 
 impl BlendedImageZoomable {
@@ -488,10 +719,37 @@ impl BlendedImageZoomable {
             blended_image,
             img_props: ImageProps::new(),
             zoom_pan: ImageZoomPan::with_scale_limits(min_scale, max_scale),
+            slider_top: None,
+            image1_transform: None,
+            image2_transform: None,
         }
+    }
+    pub fn zoom_pan_height(mut self, height: u32) -> Self {
+        self.zoom_pan.height = Some(height);
+        self
+    }
+    pub fn zoom_pan_width(mut self, width: u32) -> Self {
+        self.zoom_pan.width = Some(width);
+        self
+    }
+    pub fn zoom_pan_initial(mut self, initial: InitialZoomPan) -> Self {
+        self.zoom_pan.initial = Some(initial);
+        self
     }
     pub fn img_props(mut self, props: ImageProps) -> Self {
         self.img_props = props;
+        self
+    }
+    pub fn slider_on_bottom(mut self) -> Self {
+        self.slider_top = Some(false);
+        self
+    }
+    pub fn image1_transform(mut self, transform: Vec<f64>) -> Self {
+        self.image1_transform = Some(transform);
+        self
+    }
+    pub fn image2_transform(mut self, transform: Vec<f64>) -> Self {
+        self.image2_transform = Some(transform);
         self
     }
 }
@@ -531,17 +789,270 @@ react_component!(RawImage, "RawImage");
 react_component!(BlendedImage, "ImageRegistViewer");
 react_component!(BlendedImageZoomable, "BlenderViewerZoomable");
 react_component!(ZoomViewer, "ZoomViewer");
+react_component!(StepProgress, "StepProgress");
+react_component!(CodeBlock, "CodeBlock");
+react_component!(Tooltip, "ReactTooltip");
+react_component!(HdClusteringPlot, "HdClusteringPlot");
+react_component!(HtmlFragment, "HtmlFragment");
+react_component!(DifferentialExpressionTable, "DifferentialExpressionTable");
+react_component!(HdEndToEndAlignment, "HdEndToEndAlignment");
+react_component!(MultiLayerImages, "MultiLayerImages");
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 impl<T: ReactComponent> HtmlTemplate for T {
     fn template(&self, data_key: Option<String>) -> String {
-        let data_key =
-            data_key.expect("data-key is required to convert a react component into a template");
+        let data_key = data_key.unwrap_or_else(|| {
+            panic!(
+                "data-key is required to convert a react component {} into a template",
+                T::component_name()
+            )
+        });
         format!(
             r#"<div data-key="{data_key}" data-component="{}"></div>"#,
             T::component_name()
         )
     }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Show progress in a series of steps
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepProgress {
+    pub steps: Vec<String>,
+    pub active_step: u8,
+    pub active_step_failed: bool,
+}
+
+pub trait ParentComponentProps {
+    fn parent_component_name() -> &'static str;
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// A wrapper component that has both props and children
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ComponentWithChildren<P: ParentComponentProps, C: HtmlTemplate> {
+    pub parent_props: P,
+    pub children: C,
+}
+
+impl<P: ParentComponentProps, C: HtmlTemplate> ComponentWithChildren<P, C> {
+    pub fn new(parent_props: P, children: C) -> Self {
+        ComponentWithChildren {
+            parent_props,
+            children,
+        }
+    }
+}
+
+impl<P: ParentComponentProps, C: HtmlTemplate> HtmlTemplate for ComponentWithChildren<P, C> {
+    fn template(&self, data_key: Option<String>) -> String {
+        const PARENT_PROPS: &str = "parent_props";
+        const CHILDREN: &str = "children";
+        let (component_key, children_key) = match data_key {
+            Some(key) => (format!("{key}.{PARENT_PROPS}"), format!("{key}.{CHILDREN}")),
+            None => (PARENT_PROPS.into(), CHILDREN.into()),
+        };
+        let children = self.children.template(Some(children_key));
+        let component_name = P::parent_component_name();
+        format!(
+            r#"<div data-key="{component_key}" data-component="{component_name}">
+{children}
+</div>"#
+        )
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Inline alerts which can show up anywhere in the html unlike a top level alert
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum InlineAlertLevel {
+    Primary,
+    Secondary,
+    Success,
+    Danger,
+    Warning,
+    Info,
+    Light,
+    Dark,
+}
+
+#[derive(Serialize, Clone)]
+pub struct InlineAlertProps {
+    pub level: InlineAlertLevel,
+}
+
+impl ParentComponentProps for InlineAlertProps {
+    fn parent_component_name() -> &'static str {
+        "InlineAlert"
+    }
+}
+
+pub type InlineAlert<T> = ComponentWithChildren<InlineAlertProps, T>;
+pub type InlineTextAlert = InlineAlert<HtmlFragment>;
+
+impl InlineTextAlert {
+    pub fn with_level_and_text(level: InlineAlertLevel, text: impl ToString) -> Self {
+        InlineAlert::new(InlineAlertProps { level }, HtmlFragment::new(text))
+    }
+    pub fn primary(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Primary, text)
+    }
+    pub fn secondary(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Secondary, text)
+    }
+    pub fn success(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Success, text)
+    }
+    pub fn danger(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Danger, text)
+    }
+    pub fn warning(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Warning, text)
+    }
+    pub fn info(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Info, text)
+    }
+    pub fn light(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Light, text)
+    }
+    pub fn dark(text: impl ToString) -> Self {
+        InlineTextAlert::with_level_and_text(InlineAlertLevel::Dark, text)
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct InlineHelpProps;
+
+impl ParentComponentProps for InlineHelpProps {
+    fn parent_component_name() -> &'static str {
+        "InlineHelp"
+    }
+}
+
+pub type InlineHelp = ComponentWithChildren<InlineHelpProps, HtmlFragment>;
+
+impl InlineHelp {
+    pub fn with_content(html: String) -> Self {
+        InlineHelp::new(InlineHelpProps, HtmlFragment::new(html))
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// HTML heading
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum HeadingLevel {
+    H1,
+    H2,
+    H3,
+    H4,
+    H5,
+    H6,
+}
+
+impl HeadingLevel {
+    fn tag(self) -> &'static str {
+        match self {
+            HeadingLevel::H1 => "h1",
+            HeadingLevel::H2 => "h2",
+            HeadingLevel::H3 => "h3",
+            HeadingLevel::H4 => "h4",
+            HeadingLevel::H5 => "h5",
+            HeadingLevel::H6 => "h6",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Heading {
+    text: String,
+    level: HeadingLevel,
+}
+
+impl Heading {
+    pub fn new(level: HeadingLevel, text: impl ToString) -> Self {
+        Heading {
+            text: text.to_string(),
+            level,
+        }
+    }
+    pub fn h1(text: impl ToString) -> Self {
+        Heading::new(HeadingLevel::H1, text)
+    }
+    pub fn h2(text: impl ToString) -> Self {
+        Heading::new(HeadingLevel::H2, text)
+    }
+    pub fn h3(text: impl ToString) -> Self {
+        Heading::new(HeadingLevel::H3, text)
+    }
+    pub fn h4(text: impl ToString) -> Self {
+        Heading::new(HeadingLevel::H4, text)
+    }
+    pub fn h5(text: impl ToString) -> Self {
+        Heading::new(HeadingLevel::H5, text)
+    }
+    pub fn h6(text: impl ToString) -> Self {
+        Heading::new(HeadingLevel::H6, text)
+    }
+}
+
+impl HtmlTemplate for Heading {
+    fn template(&self, _: Option<String>) -> String {
+        let tag = self.level.tag();
+        format!("<{tag}>{}</{tag}>", self.text)
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// Two column
+
+#[cfg(feature = "derive")]
+#[derive(Debug, Clone, Serialize, Deserialize, tenx_websummary_derive::HtmlTemplate)]
+#[html(websummary_crate = "crate")]
+pub struct TwoColumn<L: HtmlTemplate, R: HtmlTemplate> {
+    #[html(row = "1")]
+    pub left: L,
+    #[html(row = "1")]
+    pub right: R,
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Collapsible panel
+#[derive(Serialize, Deserialize)]
+pub struct CollapsablePanelProps {
+    pub title: String,
+    pub plain: Option<bool>,
+}
+
+impl ParentComponentProps for CollapsablePanelProps {
+    fn parent_component_name() -> &'static str {
+        "CollapsablePanel"
+    }
+}
+
+pub type CollapsablePanel<T> = ComponentWithChildren<CollapsablePanelProps, T>;
+
+impl<T: HtmlTemplate> CollapsablePanel<T> {
+    pub fn with_title_and_content(title: impl ToString, content: T) -> Self {
+        CollapsablePanel::new(
+            CollapsablePanelProps {
+                title: title.to_string(),
+                plain: Some(false),
+            },
+            content,
+        )
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Block of preformatted text block
+#[derive(Serialize, Deserialize)]
+pub struct CodeBlock {
+    pub code: String,
+    #[serde(rename = "maxHeight")]
+    pub max_height: Option<String>,
 }
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -605,10 +1116,15 @@ impl<T: HtmlTemplate> WithTitle<T> {
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 /// String holding html
 #[derive(Debug, Serialize, Clone)]
-struct HtmlFragment(String);
-impl HtmlTemplate for HtmlFragment {
-    fn template(&self, _: Option<String>) -> String {
-        self.0.clone()
+pub struct HtmlFragment {
+    pub html: String,
+}
+
+impl HtmlFragment {
+    pub fn new(html: impl ToString) -> Self {
+        HtmlFragment {
+            html: html.to_string(),
+        }
     }
 }
 
@@ -715,7 +1231,7 @@ const DYN_GRID_MARKER: &str = "__AUbkUE__DYN_GRID__WhcSw=__";
 pub struct DynGrid {
     grid_data: Vec<Value>,
     #[serde(skip)]
-    elements: Vec<HtmlFragment>,
+    elements: Vec<String>,
     #[serde(skip)]
     layout: GridLayout,
 }
@@ -731,7 +1247,7 @@ impl DynGrid {
     pub fn push<T: HtmlTemplate + Serialize>(&mut self, element: T) {
         self.grid_data.push(serde_json::to_value(&element).unwrap());
         self.elements
-            .push(HtmlFragment(element.template(Some(DYN_GRID_MARKER.into()))));
+            .push(element.template(Some(DYN_GRID_MARKER.into())));
     }
     pub fn with_elements<T: 'static + HtmlTemplate + Serialize>(
         elements: Vec<T>,
@@ -756,21 +1272,21 @@ impl HtmlTemplate for DynGrid {
                 .chunks(n as usize)
                 .into_iter()
                 .map(|same_row_elements| {
-                    DivWrapper::row(&HtmlFragment(
-                        same_row_elements
+                    DivWrapper::row(
+                        &same_row_elements
                             .map(|(i, element)| {
                                 let data_key = match &data_key {
                                     Some(key) => format!("{key}.grid_data[{i}]"),
                                     None => format!("grid_data[{i}]"),
                                 };
                                 DivWrapper::new(
-                                    &HtmlFragment(element.0.replace(DYN_GRID_MARKER, &data_key)),
+                                    &element.replace(DYN_GRID_MARKER, &data_key),
                                     col_class,
                                 )
                                 .template(None)
                             })
                             .join("\n"),
-                    ))
+                    )
                     .template(None)
                 })
                 .join("\n"),
@@ -781,11 +1297,50 @@ impl HtmlTemplate for DynGrid {
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 // A card which has a raised border
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Card<T: HtmlTemplate>(pub T);
+pub struct Card<T: HtmlTemplate> {
+    #[serde(flatten)]
+    inner: T,
+    #[serde(skip, default)]
+    width: CardWidth,
+}
+
+impl<T: HtmlTemplate> Card<T> {
+    pub fn half_width(inner: T) -> Self {
+        Card {
+            inner,
+            width: CardWidth::Half,
+        }
+    }
+    pub fn with_width(inner: T, width: CardWidth) -> Self {
+        Card { inner, width }
+    }
+    pub fn full_width(inner: T) -> Self {
+        Card {
+            inner,
+            width: CardWidth::Full,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum CardWidth {
+    Full,
+    #[default]
+    Half,
+}
+
+impl CardWidth {
+    fn class(&self) -> &'static str {
+        match self {
+            CardWidth::Full => "summary_row",
+            CardWidth::Half => "summary_card",
+        }
+    }
+}
 
 impl<T: HtmlTemplate> HtmlTemplate for Card<T> {
     fn template(&self, data_key: Option<String>) -> String {
-        DivWrapper::new(&self.0, "summary_card").template(data_key)
+        DivWrapper::new(&self.inner, self.width.class()).template(data_key)
     }
 }
 
@@ -820,7 +1375,7 @@ const TAB_MARKER: &str = "__AUbkUE__TAB__WhcSw=__";
 pub struct Tabs {
     tab_data: Vec<Value>,
     #[serde(skip)]
-    elements: Vec<HtmlFragment>,
+    elements: Vec<String>,
     #[serde(skip)]
     titles: Vec<String>,
 }
@@ -832,7 +1387,7 @@ impl Tabs {
     pub fn push<T: HtmlTemplate + Serialize>(&mut self, tab_title: impl Into<String>, element: T) {
         self.tab_data.push(serde_json::to_value(&element).unwrap());
         self.elements
-            .push(HtmlFragment(element.template(Some(TAB_MARKER.into()))));
+            .push(element.template(Some(TAB_MARKER.into())));
         self.titles.push(tab_title.into());
     }
     pub fn tab<T: HtmlTemplate + Serialize>(
@@ -853,7 +1408,7 @@ impl HtmlTemplate for Tabs {
         };
         let inner = std::iter::zip(&self.elements, &self.titles)
             .enumerate()
-            .map(|(i, (HtmlFragment(ref element), title))| {
+            .map(|(i, (element, title))| {
                 let inner = element.replace(TAB_MARKER, &format!("{base_data_key}[{i}]"));
                 format!(
                     r#"<div class="tab-wrapper" data-event-key="tab_{i}" data-title="{title}">
@@ -886,6 +1441,151 @@ impl LinkedText {
 impl HtmlTemplate for LinkedText {
     fn template(&self, _: Option<String>) -> String {
         self.html()
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// HdClusteringPlot
+
+#[derive(Serialize, Deserialize)]
+pub struct HdClusteringSingleClusterData {
+    pub cluster_name: String,
+    pub hex_color: String,
+    pub spatial_plot: String,
+    pub umap_plot: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct HdClusteringSpatialPlotProps {
+    pub title: String,
+    pub tissue_image: String,
+    pub tissue_css_transform: Vec<f64>,
+    pub spot_css_transform: Vec<f64>,
+    pub width: u32,
+    pub height: u32,
+    pub initial_zoom_pan: InitialZoomPan,
+}
+
+impl AddToSharedResource for HdClusteringSpatialPlotProps {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.tissue_image = shared_resource.insert(Value::String(self.tissue_image.clone()));
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct HdClusteringUmapPlotProps {
+    pub title: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct HdClusteringPlot {
+    pub spatial_plot_props: HdClusteringSpatialPlotProps,
+    pub umap_plot_props: HdClusteringUmapPlotProps,
+    pub clusters: Vec<HdClusteringSingleClusterData>,
+}
+
+impl AddToSharedResource for HdClusteringPlot {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.spatial_plot_props
+            .add_to_shared_resource(shared_resource);
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DifferentialExpressionTable {
+    pub table: Value,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HdEndToEndAlignment {
+    pub tissue_image: String,
+    pub tissue_image_title: String,
+    pub tissue_css_transform: Vec<f64>,
+    pub display_height: u32,
+    pub display_width: u32,
+    pub umi_images: Vec<HdEndToEndAlignmentUmiImage>,
+    pub umi_image_title: String,
+    pub umi_css_transform: Vec<f64>,
+    pub initial_zoom_pan: Option<InitialZoomPan>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HdEndToEndAlignmentUmiImage {
+    pub colormap: String,
+    pub all_bins_image: String,
+    pub filtered_bins_image: String,
+    pub legend_image: String,
+}
+
+impl AddToSharedResource for HdEndToEndAlignmentUmiImage {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.all_bins_image = shared_resource.insert(Value::String(self.all_bins_image.clone()));
+        self.filtered_bins_image =
+            shared_resource.insert(Value::String(self.filtered_bins_image.clone()));
+        self.legend_image = shared_resource.insert(Value::String(self.legend_image.clone()));
+    }
+}
+
+impl AddToSharedResource for HdEndToEndAlignment {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.tissue_image = shared_resource.insert(Value::String(self.tissue_image.clone()));
+        for umi_image in &mut self.umi_images {
+            umi_image.add_to_shared_resource(shared_resource);
+        }
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// MultiLayerImages
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InitialFocus {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LabeledImage {
+    pub label: Option<String>,
+    pub color: Option<String>,
+    pub image: String,
+    pub css_transform: Option<Vec<f64>>,
+}
+
+impl AddToSharedResource for LabeledImage {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.image = shared_resource.insert(Value::String(self.image.clone()));
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Layer {
+    pub name: String,
+    pub images: Vec<LabeledImage>,
+}
+
+impl AddToSharedResource for Layer {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.images
+            .iter_mut()
+            .for_each(|labelled_image| labelled_image.add_to_shared_resource(shared_resource));
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MultiLayerImages {
+    pub focus: InitialFocus,
+    pub layers: Vec<Layer>,
+}
+
+impl AddToSharedResource for MultiLayerImages {
+    fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
+        self.layers
+            .iter_mut()
+            .for_each(|layer| layer.add_to_shared_resource(shared_resource));
     }
 }
 

@@ -118,6 +118,17 @@ pub enum FormInput {
     SingleSelect(SingleSelect),
 }
 
+impl FormInput {
+    fn set_optional(&mut self) {
+        match self {
+            FormInput::Input(v) => v.required = false,
+            FormInput::TextArea(v) => v.required = Some(false),
+            FormInput::MultiSelect(v) => v.required = Some(false),
+            FormInput::SingleSelect(v) => v.required = Some(false),
+        }
+    }
+}
+
 impl From<InputElement> for FormInput {
     fn from(value: InputElement) -> Self {
         FormInput::Input(value)
@@ -555,6 +566,29 @@ where
         match &self.deserialized {
             Ok(_) => FieldValidationResult::Valid,
             Err(e) => FieldValidationResult::Invalid { error: e.clone() },
+        }
+    }
+}
+
+impl<T: CreateFormInput> CreateFormInput for Option<T> {
+    type Config = T::Config;
+
+    fn create_form_input(config: Self::Config, name: String, value: Option<Self>) -> FormInput {
+        let mut input = T::create_form_input(config, name, value.flatten());
+        input.set_optional();
+        input
+    }
+
+    fn default_config() -> Self::Config {
+        T::default_config()
+    }
+}
+
+impl<T: FieldValidation> FieldValidation for Option<T> {
+    fn validate(&self) -> FieldValidationResult {
+        match self {
+            Some(v) => v.validate(),
+            None => FieldValidationResult::Valid,
         }
     }
 }
