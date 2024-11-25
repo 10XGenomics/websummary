@@ -1,5 +1,14 @@
 [workspace]
-members = ["rust/tenx-websummary", "rust/tenx-websummary-derive"]
+
+members = [
+  "rust/tenx-websummary",
+  "rust/tenx-websummary-build",
+  "rust/tenx-websummary-derive",
+  "rust/tenx-websummary-example",
+]
+
+exclude = []
+
 resolver = "2"
 
 [profile.release]

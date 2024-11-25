@@ -501,6 +501,7 @@ pub struct RawImage {
     /// Base 64 encoded image
     encoded_image: String,
     zoom_pan: Option<ImageZoomPan>,
+    link: Option<String>,
     #[serde(flatten)]
     props: ImageProps,
 }
@@ -511,6 +512,7 @@ impl RawImage {
             encoded_image,
             props: ImageProps::new(),
             zoom_pan: None,
+            link: None,
         }
     }
     pub fn props(mut self, props: ImageProps) -> Self {
@@ -523,6 +525,10 @@ impl RawImage {
     }
     pub fn zoomable(mut self, min_scale: f64, max_scale: f64) -> Self {
         self.zoom_pan = Some(ImageZoomPan::with_scale_limits(min_scale, max_scale));
+        self
+    }
+    pub fn with_link(mut self, link: &str) -> Self {
+        self.link = Some(link.into());
         self
     }
 }
@@ -744,6 +750,10 @@ impl BlendedImageZoomable {
         self.slider_top = Some(false);
         self
     }
+    pub fn slider_on_top(mut self) -> Self {
+        self.slider_top = Some(true);
+        self
+    }
     pub fn image1_transform(mut self, transform: Vec<f64>) -> Self {
         self.image1_transform = Some(transform);
         self
@@ -794,9 +804,11 @@ react_component!(CodeBlock, "CodeBlock");
 react_component!(Tooltip, "ReactTooltip");
 react_component!(HdClusteringPlot, "HdClusteringPlot");
 react_component!(HtmlFragment, "HtmlFragment");
+react_component!(JavaScript, "JavaScript");
 react_component!(DifferentialExpressionTable, "DifferentialExpressionTable");
 react_component!(HdEndToEndAlignment, "HdEndToEndAlignment");
 react_component!(MultiLayerImages, "MultiLayerImages");
+react_component!(DownloadableFile, "DownloadableFile");
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 impl<T: ReactComponent> HtmlTemplate for T {
@@ -1114,6 +1126,21 @@ impl<T: HtmlTemplate> WithTitle<T> {
 }
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// String holding javascript code
+#[derive(Debug, Serialize, Clone)]
+pub struct JavaScript {
+    pub code: String,
+}
+
+impl JavaScript {
+    pub fn new(code: impl ToString) -> Self {
+        JavaScript {
+            code: code.to_string(),
+        }
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 /// String holding html
 #[derive(Debug, Serialize, Clone)]
 pub struct HtmlFragment {
@@ -1167,8 +1194,10 @@ impl<'a, T: HtmlTemplate> HtmlTemplate for DivWrapper<'a, T> {
 /// Layout of the grid
 #[derive(Debug, Clone)]
 pub enum GridLayout {
-    // A grid with upto a given number of columns
+    // A grid with upto a given number of columns and a responsive layout
     MaxCols(u8),
+    // A grid with upto a given number of columns but non-responsive layout
+    MaxColsNonResponsive(u8),
 }
 
 impl GridLayout {
@@ -1181,6 +1210,7 @@ impl GridLayout {
                 6 => "col-sm-2",
                 _ => "col",
             },
+            _ => unimplemented!(),
         }
     }
 }
@@ -1263,7 +1293,6 @@ impl DynGrid {
 
 impl HtmlTemplate for DynGrid {
     fn template(&self, data_key: Option<String>) -> String {
-        let col_class = self.layout.col_class();
         match self.layout {
             GridLayout::MaxCols(n) => self
                 .elements
@@ -1281,7 +1310,7 @@ impl HtmlTemplate for DynGrid {
                                 };
                                 DivWrapper::new(
                                     &element.replace(DYN_GRID_MARKER, &data_key),
-                                    col_class,
+                                    self.layout.col_class(),
                                 )
                                 .template(None)
                             })
@@ -1290,6 +1319,28 @@ impl HtmlTemplate for DynGrid {
                     .template(None)
                 })
                 .join("\n"),
+            GridLayout::MaxColsNonResponsive(n) => {
+                let rows = self
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .chunks(n as usize)
+                    .into_iter()
+                    .map(|same_row_elements| {
+                        let tds = same_row_elements
+                            .map(|(i, element)| {
+                                let data_key = match &data_key {
+                                    Some(key) => format!("{key}.grid_data[{i}]"),
+                                    None => format!("grid_data[{i}]"),
+                                };
+                                format!("<td>{}</td>", element.replace(DYN_GRID_MARKER, &data_key))
+                            })
+                            .join("\n");
+                        format!("<tr>{}</tr>", tds)
+                    })
+                    .join("\n");
+                format!("<table><tbody>{}</tbody></table>", rows)
+            }
         }
     }
 }
@@ -1491,7 +1542,7 @@ impl AddToSharedResource for HdClusteringPlot {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct DifferentialExpressionTable {
     pub table: Value,
 }
@@ -1504,26 +1555,23 @@ pub struct HdEndToEndAlignment {
     pub tissue_css_transform: Vec<f64>,
     pub display_height: u32,
     pub display_width: u32,
-    pub umi_images: Vec<HdEndToEndAlignmentUmiImage>,
+    pub umi_legend_images: Vec<HdEndToEndAlignmentUmiLegendImage>,
+    pub grayscale_umi_image: String,
     pub umi_image_title: String,
     pub umi_css_transform: Vec<f64>,
+    pub tissue_mask_image: String,
     pub initial_zoom_pan: Option<InitialZoomPan>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct HdEndToEndAlignmentUmiImage {
+pub struct HdEndToEndAlignmentUmiLegendImage {
     pub colormap: String,
-    pub all_bins_image: String,
-    pub filtered_bins_image: String,
     pub legend_image: String,
 }
 
-impl AddToSharedResource for HdEndToEndAlignmentUmiImage {
+impl AddToSharedResource for HdEndToEndAlignmentUmiLegendImage {
     fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
-        self.all_bins_image = shared_resource.insert(Value::String(self.all_bins_image.clone()));
-        self.filtered_bins_image =
-            shared_resource.insert(Value::String(self.filtered_bins_image.clone()));
         self.legend_image = shared_resource.insert(Value::String(self.legend_image.clone()));
     }
 }
@@ -1531,7 +1579,9 @@ impl AddToSharedResource for HdEndToEndAlignmentUmiImage {
 impl AddToSharedResource for HdEndToEndAlignment {
     fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
         self.tissue_image = shared_resource.insert(Value::String(self.tissue_image.clone()));
-        for umi_image in &mut self.umi_images {
+        self.grayscale_umi_image =
+            shared_resource.insert(Value::String(self.grayscale_umi_image.clone()));
+        for umi_image in &mut self.umi_legend_images {
             umi_image.add_to_shared_resource(shared_resource);
         }
     }
@@ -1576,9 +1626,11 @@ impl AddToSharedResource for Layer {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MultiLayerImages {
     pub focus: InitialFocus,
     pub layers: Vec<Layer>,
+    pub full_screen: bool,
 }
 
 impl AddToSharedResource for MultiLayerImages {
@@ -1586,6 +1638,44 @@ impl AddToSharedResource for MultiLayerImages {
         self.layers
             .iter_mut()
             .for_each(|layer| layer.add_to_shared_resource(shared_resource));
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Csv download link
+#[derive(Serialize, Deserialize)]
+pub struct DownloadableFile {
+    pub data: String,
+    pub filename: String,
+    pub text: String,
+    pub mime_type: String,
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Command line template
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandLine {
+    pub title: String,
+    pub data: Vec<TermDesc>,
+    pub show_dark_button_icon: bool,
+}
+
+impl ReactComponent for CommandLine {
+    fn component_name() -> &'static str {
+        "DynamicHelptext"
+    }
+}
+
+impl CommandLine {
+    pub fn new(cmdline: &str) -> Result<Self, Error> {
+        Ok(Self {
+            title: "Command Line Arguments".to_string(),
+            data: vec![TermDesc("".to_string(), 
+                vec![format!("<span style='font-size: 18px;'><code><pre style='white-space: pre-wrap;'>{}</pre></code></span>", 
+                    cmdline)])],
+            show_dark_button_icon: true,
+        })
     }
 }
 

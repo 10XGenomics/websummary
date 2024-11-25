@@ -30,10 +30,10 @@ pub struct InputFeedback {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct InputElement {
-    name: String,
+    pub name: String,
     #[serde(rename = "type")]
-    ty: InputType,
-    value: Option<String>,
+    pub ty: InputType,
+    pub value: Option<String>,
     min: Option<String>,
     max: Option<String>,
     step: Option<String>,
@@ -100,10 +100,38 @@ pub struct MultiSelect {
 pub struct TextArea {
     #[serde(skip_serializing_if = "Option::is_none")]
     rows: Option<u32>,
-    name: String,
+    pub name: String,
     placeholder: Option<String>,
     required: Option<bool>,
-    value: Option<String>,
+    pub value: Option<String>,
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+// Spreadsheet
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SpreadsheetInput {
+    pub name: String,
+    pub column_labels: Option<Vec<String>>,
+    pub n_rows: usize,
+    pub n_cols: usize,
+    pub max_height: Option<String>,
+    pub value: Option<String>,
+}
+
+impl ReactComponent for SpreadsheetInput {
+    fn component_name() -> &'static str {
+        "SpreadsheetInput"
+    }
+}
+
+pub struct SpreadsheetInputConfig {
+    pub column_labels: Option<Vec<String>>,
+    pub n_rows: usize,
+    pub n_cols: usize,
+    pub max_height: Option<String>,
+    pub value: Option<String>,
 }
 
 // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -116,6 +144,7 @@ pub enum FormInput {
     TextArea(TextArea),
     MultiSelect(MultiSelect),
     SingleSelect(SingleSelect),
+    Spreadsheet(SpreadsheetInput),
 }
 
 impl FormInput {
@@ -125,6 +154,7 @@ impl FormInput {
             FormInput::TextArea(v) => v.required = Some(false),
             FormInput::MultiSelect(v) => v.required = Some(false),
             FormInput::SingleSelect(v) => v.required = Some(false),
+            FormInput::Spreadsheet(_) => {}
         }
     }
 }
@@ -151,6 +181,12 @@ impl From<SingleSelect> for FormInput {
     }
 }
 
+impl From<SpreadsheetInput> for FormInput {
+    fn from(value: SpreadsheetInput) -> Self {
+        FormInput::Spreadsheet(value)
+    }
+}
+
 impl HtmlTemplate for FormInput {
     fn template(&self, data_key: Option<String>) -> String {
         let data_key = Some(
@@ -164,6 +200,7 @@ impl HtmlTemplate for FormInput {
             FormInput::TextArea(v) => v.template(data_key),
             FormInput::MultiSelect(v) => v.template(data_key),
             FormInput::SingleSelect(v) => v.template(data_key),
+            FormInput::Spreadsheet(v) => v.template(data_key),
         }
     }
 }
@@ -462,7 +499,7 @@ pub trait IntoHtmlForm: Sized {
 }
 
 #[derive(Default)]
-pub struct FormConfigTextArea {
+pub struct TextAreaConfig {
     rows: Option<u32>,
     placeholder: Option<String>,
 }
@@ -501,7 +538,7 @@ where
     T: Clone,
     Builder: CsvReaderBuilder + Clone,
 {
-    pub fn inner(self) -> Result<Vec<T>, String> {
+    pub fn deserialized(self) -> Result<Vec<T>, String> {
         self.deserialized
     }
 }
@@ -511,7 +548,7 @@ where
     T: Clone,
     Builder: CsvReaderBuilder + Clone,
 {
-    type Config = FormConfigTextArea;
+    type Config = TextAreaConfig;
 
     fn create_form_input(config: Self::Config, name: String, value: Option<Self>) -> FormInput {
         FormInput::TextArea(TextArea {
@@ -524,7 +561,7 @@ where
     }
 
     fn default_config() -> Self::Config {
-        FormConfigTextArea::default()
+        TextAreaConfig::default()
     }
 }
 
@@ -590,5 +627,127 @@ impl<T: FieldValidation> FieldValidation for Option<T> {
             Some(v) => v.validate(),
             None => FieldValidationResult::Valid,
         }
+    }
+}
+
+/// Hack because the csv crate does not expose this explicitly
+pub fn tabular_file_header<T>() -> Result<Vec<String>, Error>
+where
+    T: Serialize + Default,
+{
+    let mut buffer = Vec::new();
+    let mut wtr = csv::WriterBuilder::default()
+        .has_headers(true)
+        .from_writer(&mut buffer);
+    // The header row is written automatically.
+    wtr.serialize(T::default())?;
+    wtr.flush()?;
+    drop(wtr);
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(buffer.as_slice());
+    let headers = rdr.headers()?;
+    Ok(headers
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect())
+}
+
+pub trait ConfigureSpreadsheet: Serialize + Default {
+    fn max_height() -> Option<String> {
+        None
+    }
+    fn num_rows() -> usize {
+        10
+    }
+    fn initial_value() -> Option<Vec<Self>>
+    where
+        Self: Sized,
+    {
+        None
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(from = "String", into = "String")]
+#[serde(bound = "T: Serialize + DeserializeOwned")]
+pub struct Spreadsheet<T: Clone + ConfigureSpreadsheet> {
+    pub input: TableInput<T, TsvNoHeader>,
+}
+
+impl<T> From<String> for Spreadsheet<T>
+where
+    T: Clone + ConfigureSpreadsheet + DeserializeOwned,
+{
+    fn from(src: String) -> Self {
+        Spreadsheet {
+            input: TableInput::from(src),
+        }
+    }
+}
+
+impl<T> From<Spreadsheet<T>> for String
+where
+    T: Clone + ConfigureSpreadsheet + DeserializeOwned,
+{
+    fn from(src: Spreadsheet<T>) -> String {
+        src.input.into()
+    }
+}
+
+impl<T> Spreadsheet<T>
+where
+    T: Clone + ConfigureSpreadsheet + DeserializeOwned,
+{
+    pub fn deserialized(self) -> Result<Vec<T>, String> {
+        self.input.deserialized()
+    }
+}
+
+impl<T> CreateFormInput for Spreadsheet<T>
+where
+    T: Clone + ConfigureSpreadsheet + DeserializeOwned + Serialize,
+{
+    type Config = SpreadsheetInputConfig;
+
+    fn create_form_input(config: Self::Config, name: String, value: Option<Self>) -> FormInput {
+        FormInput::Spreadsheet(SpreadsheetInput {
+            name,
+            column_labels: config.column_labels,
+            n_rows: config.n_rows,
+            n_cols: config.n_cols,
+            max_height: config.max_height,
+            value: value.map(|x| x.input.raw_value),
+        })
+    }
+
+    fn default_config() -> Self::Config {
+        let column_labels = tabular_file_header::<T>().unwrap();
+        let n_cols = column_labels.len();
+        SpreadsheetInputConfig {
+            column_labels: Some(column_labels),
+            n_rows: T::num_rows(),
+            n_cols,
+            max_height: T::max_height(),
+            value: T::initial_value().map(|x| {
+                let mut wtr = csv::WriterBuilder::new()
+                    .delimiter(b'\t')
+                    .has_headers(false)
+                    .from_writer(vec![]);
+                for row in x {
+                    wtr.serialize(row).unwrap();
+                }
+                String::from_utf8(wtr.into_inner().unwrap()).unwrap()
+            }),
+        }
+    }
+}
+
+impl<T> FieldValidation for Spreadsheet<T>
+where
+    T: Clone + ConfigureSpreadsheet + DeserializeOwned + Serialize,
+{
+    fn validate(&self) -> FieldValidationResult {
+        self.input.validate()
     }
 }

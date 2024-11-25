@@ -1,13 +1,11 @@
 #![cfg(feature = "image_proc")]
 
-use std::path::Path;
-
-use anyhow::Error;
+use crate::components::RawImage;
+use anyhow::Result;
 use image::imageops::FilterType;
 use image::io::Reader as ImageReader;
 use image::DynamicImage;
-
-use crate::components::RawImage;
+use std::path::Path;
 
 pub enum ImageResize {
     /// Resize the image such that the new height is less than the number specified
@@ -27,11 +25,7 @@ pub enum ImageResize {
 }
 
 impl ImageResize {
-    pub fn resize_image(
-        self,
-        img_path: &Path,
-        filter_type: FilterType,
-    ) -> Result<DynamicImage, Error> {
+    pub fn resize_image(self, img_path: &Path, filter_type: FilterType) -> Result<DynamicImage> {
         Ok(self.resize_dynamic_image(ImageReader::open(img_path)?.decode()?, filter_type))
     }
 
@@ -70,15 +64,14 @@ impl ImageResize {
         self,
         img_path: &Path,
         filter_type: FilterType,
-    ) -> Result<String, Error> {
-        use crate::image_base64_encode::ImageFormat;
-        use image::ImageOutputFormat;
+    ) -> Result<String> {
+        use crate::image_base64_encode::Base64ImageEncoder;
         use std::io::Cursor;
 
         let img = self.resize_image(img_path, filter_type)?;
         let mut buf = Cursor::new(Vec::with_capacity(img.as_bytes().len()));
-        img.write_to(&mut buf, ImageOutputFormat::Png)?;
-        Ok(ImageFormat::Png.encode_bytes(buf.get_ref()))
+        img.write_to(&mut buf, image::ImageFormat::Png)?;
+        Ok(Base64ImageEncoder::Png.encode_bytes(buf.get_ref()))
     }
 }
 
@@ -88,7 +81,7 @@ impl RawImage {
         img_path: &Path,
         filter_type: FilterType,
         resize: ImageResize,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         Ok(RawImage::new(
             resize.resize_and_encode_image(img_path, filter_type)?,
         ))
