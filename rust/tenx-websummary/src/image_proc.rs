@@ -3,8 +3,7 @@
 use crate::components::RawImage;
 use anyhow::Result;
 use image::imageops::FilterType;
-use image::io::Reader as ImageReader;
-use image::DynamicImage;
+use image::{DynamicImage, ImageReader};
 use std::path::Path;
 
 pub enum ImageResize {

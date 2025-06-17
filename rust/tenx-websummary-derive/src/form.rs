@@ -15,7 +15,7 @@ enum Method {
     Post,
 }
 
-#[derive(Debug, FromDeriveInput)]
+#[derive(FromDeriveInput)]
 #[darling(attributes(html_form), supports(struct_named, enum_unit))]
 pub(crate) struct HtmlFormReceiver {
     /// The struct name.
@@ -64,15 +64,21 @@ impl HtmlFormFieldReceiver {
         let doc_comments: Vec<_> = self
             .attrs
             .iter()
-            .filter_map(|attr| {
-                if let Ok(syn::Meta::NameValue(nv)) = &attr.parse_meta() {
-                    if nv.path.is_ident("doc") {
-                        if let syn::Lit::Str(lit_str) = &nv.lit {
-                            return Some(lit_str.value().trim().to_string());
-                        }
-                    }
-                }
-                None
+            .filter(|attr| attr.path().is_ident("doc"))
+            .map(|attr| {
+                let syn::Meta::NameValue(syn::MetaNameValue {
+                    path: _,
+                    eq_token: _,
+                    value:
+                        syn::Expr::Lit(syn::ExprLit {
+                            attrs: _,
+                            lit: syn::Lit::Str(litstr),
+                        }),
+                }) = &attr.meta
+                else {
+                    unreachable!();
+                };
+                litstr.value().trim().to_string()
             })
             .filter(|x| !x.is_empty())
             .collect();

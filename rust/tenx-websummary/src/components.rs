@@ -18,17 +18,18 @@
 //! | BlendedImage | ImageRegistViewer.js |
 //! | VegaLitePlot | VegaLitePlot.js |
 //! | Tooltip | ReactTooltip.js |
+//! | VegaLiteStatic | VegaLiteStatic.tsx |
 //!
 
-use std::{collections::HashMap, fmt::Display, marker::PhantomData};
-
+use crate::{react_component, AddToSharedResource, HtmlTemplate, SharedResources};
 use anyhow::Error;
 use itertools::Itertools;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::{react_component, AddToSharedResource, HtmlTemplate, SharedResources};
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::marker::PhantomData;
 
 impl HtmlTemplate for String {
     fn template(&self, _data_key: Option<String>) -> String {
@@ -349,6 +350,71 @@ impl VegaLitePlot {
             actions: None,
             renderer: None,
         })
+    }
+}
+
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// Static Vega-Lite plot
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VegaLiteStatic {
+    pub spec: Value,
+    pub format: Option<ImageFormat>,
+    pub width: Option<Value>,
+    pub height: Option<Value>,
+    #[serde(rename = "scaleFactor")]
+    pub scale_factor: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ImageFormat {
+    Jpeg,
+    Svg,
+    #[default]
+    Png,
+}
+
+impl VegaLiteStatic {
+    /// Create a new [VegaLiteStatic] from the specified Vega-Lite spec. By default,
+    /// writes as a .png
+    pub fn from_json_str(json_str: &str) -> Result<Self, Error> {
+        Self::try_new(json_str, None, None, None, None)
+    }
+
+    pub fn try_new(
+        json_str: &str,
+        format: Option<ImageFormat>,
+        width: Option<Value>,
+        height: Option<Value>,
+        scale_factor: Option<usize>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            spec: serde_json::from_str(json_str)?,
+            format,
+            width,
+            height,
+            scale_factor,
+        })
+    }
+
+    pub fn scale(mut self, scale_factor: usize) -> Self {
+        assert!(scale_factor > 0, "Must provide a non-zero scale factor");
+        self.scale_factor = Some(scale_factor);
+        self
+    }
+
+    pub fn width(mut self, width: Value) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub fn height(mut self, height: Value) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    pub fn format(mut self, format: ImageFormat) -> Self {
+        self.format = Some(format);
+        self
     }
 }
 
@@ -795,6 +861,7 @@ react_component!(GenericTable, "Table");
 react_component!(TableMetric, "TableMetric");
 react_component!(PlotlyChart, "Plot");
 react_component!(VegaLitePlot, "VegaLitePlot");
+react_component!(VegaLiteStatic, "VegaLiteStatic");
 react_component!(RawImage, "RawImage");
 react_component!(BlendedImage, "ImageRegistViewer");
 react_component!(BlendedImageZoomable, "BlenderViewerZoomable");
@@ -1563,7 +1630,7 @@ pub struct HdEndToEndAlignment {
     pub initial_zoom_pan: Option<InitialZoomPan>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HdEndToEndAlignmentUmiLegendImage {
     pub colormap: String,
@@ -1603,6 +1670,7 @@ pub struct LabeledImage {
     pub color: Option<String>,
     pub image: String,
     pub css_transform: Option<Vec<f64>>,
+    pub legend_image: Option<String>,
 }
 
 impl AddToSharedResource for LabeledImage {
@@ -1615,6 +1683,7 @@ impl AddToSharedResource for LabeledImage {
 pub struct Layer {
     pub name: String,
     pub images: Vec<LabeledImage>,
+    pub initial_opacity: Option<f64>,
 }
 
 impl AddToSharedResource for Layer {
@@ -1631,6 +1700,11 @@ pub struct MultiLayerImages {
     pub focus: InitialFocus,
     pub layers: Vec<Layer>,
     pub full_screen: bool,
+    #[serde(default)]
+    pub show_full_screen_button: bool,
+    pub legend_title: Option<String>,
+    pub legend_right_offset: Option<isize>,
+    pub legend_width_px: Option<u32>,
 }
 
 impl AddToSharedResource for MultiLayerImages {

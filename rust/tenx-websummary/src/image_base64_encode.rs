@@ -2,6 +2,8 @@
 
 use crate::components::RawImage;
 use anyhow::{bail, Result};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use std::path::Path;
 
 #[derive(Clone, Copy)]
@@ -28,7 +30,7 @@ impl Base64ImageEncoder {
     }
 
     pub fn encode_bytes(self, file_bytes: &[u8]) -> String {
-        let base64_encoded = base64::encode(file_bytes);
+        let base64_encoded = BASE64_STANDARD.encode(file_bytes);
         let mime = match self {
             Base64ImageEncoder::Jpeg => "jpeg",
             Base64ImageEncoder::Png => "png",
