@@ -711,13 +711,14 @@ where
     type Config = SpreadsheetInputConfig;
 
     fn create_form_input(config: Self::Config, name: String, value: Option<Self>) -> FormInput {
+        let value = value.map(|x| x.input.raw_value).or(config.value);
         FormInput::Spreadsheet(SpreadsheetInput {
             name,
             column_labels: config.column_labels,
             n_rows: config.n_rows,
             n_cols: config.n_cols,
             max_height: config.max_height,
-            value: value.map(|x| x.input.raw_value),
+            value,
         })
     }
 

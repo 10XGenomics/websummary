@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tenx-websummary-build = { path = "../tenx-websummary-build", optional = true }
 tenx-websummary-derive = { path = "../tenx-websummary-derive", optional = true }
-itertools = ">=0.10,<1"
+itertools = ">=0.10, <1"
 rand = "0.8"
 
 # Support encoding image as base64
