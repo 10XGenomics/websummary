@@ -179,6 +179,48 @@ impl GenericTable {
     }
 }
 
+// :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+/// Table with custom dark-mode styling for the Scanpy websummary (no bold last
+/// column, row separators). Rendered by the `NgxMetricsTable` React component.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NgxMetricsTable {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<Vec<String>>,
+    pub rows: Vec<TableRow>,
+}
+
+impl NgxMetricsTable {
+    /// Generate a NgxMetricsTable from rows and optional header
+    pub fn from_rows(rows_vec: Vec<Vec<String>>, header: Option<Vec<String>>) -> Self {
+        let rows = rows_vec.into_iter().map(TableRow::from).collect();
+        NgxMetricsTable { header, rows }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ColumnType {
+    String,
+    Number,
+    Boolean,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColumnDef {
+    pub key: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub col_type: ColumnType,
+}
+
+/// A filterable, scrollable table rendered by the `FilterableRow` React component.
+/// Each row is a map from column key to value, matching the `key` fields in `columns`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FilterableRow {
+    pub columns: Vec<ColumnDef>,
+    pub rows: Vec<HashMap<String, Value>>,
+}
+
 fn deserialize_tuple_list_as_string<'de, D>(
     deserializer: D,
 ) -> Result<Vec<(String, String)>, D::Error>
@@ -858,6 +900,9 @@ react_component!(HeroMetric, "Metric");
 react_component!(TitleWithTermDesc, "DynamicHelptext");
 react_component!(TitleWithHelp, "HeaderWithHelp");
 react_component!(GenericTable, "Table");
+react_component!(NgxMetricsTable, "NgxMetricsTable");
+react_component!(FilterableRow, "FilterableRow");
+
 react_component!(TableMetric, "TableMetric");
 react_component!(PlotlyChart, "Plot");
 react_component!(VegaLitePlot, "VegaLitePlot");
@@ -1668,14 +1713,19 @@ pub struct InitialFocus {
 pub struct LabeledImage {
     pub label: Option<String>,
     pub color: Option<String>,
-    pub image: String,
+    pub image: Option<String>,
     pub css_transform: Option<Vec<f64>>,
     pub legend_image: Option<String>,
 }
 
 impl AddToSharedResource for LabeledImage {
     fn add_to_shared_resource(&mut self, shared_resource: &mut SharedResources) {
-        self.image = shared_resource.insert(Value::String(self.image.clone()));
+        if let Some(ref mut img) = self.image {
+            *img = shared_resource.insert(Value::String(img.clone()));
+        }
+        if let Some(ref mut legend) = self.legend_image {
+            *legend = shared_resource.insert(Value::String(legend.clone()));
+        }
     }
 }
 
@@ -1684,6 +1734,11 @@ pub struct Layer {
     pub name: String,
     pub images: Vec<LabeledImage>,
     pub initial_opacity: Option<f64>,
+    pub composite_indexed_image: Option<String>,
+    #[serde(default)]
+    pub render_scale: Option<f64>,
+    #[serde(default)]
+    pub z_index: Option<u64>,
 }
 
 impl AddToSharedResource for Layer {
@@ -1691,6 +1746,9 @@ impl AddToSharedResource for Layer {
         self.images
             .iter_mut()
             .for_each(|labelled_image| labelled_image.add_to_shared_resource(shared_resource));
+        if let Some(ref mut ci) = self.composite_indexed_image {
+            *ci = shared_resource.insert(Value::String(ci.clone()));
+        }
     }
 }
 
@@ -1922,5 +1980,30 @@ mod tests {
             "slider_title": ""
         }"#;
         let _: BlendedImage = serde_json::from_str(json_str).unwrap();
+    }
+
+    #[test]
+    fn test_filterable_row_roundtrip() {
+        let json_str = r#"{
+            "columns": [
+                {"key": "gene_name", "label": "Gene", "type": "string"},
+                {"key": "count", "label": "Count", "type": "number"},
+                {"key": "is_hvg", "label": "Is HVG?", "type": "boolean"}
+            ],
+            "rows": [
+                {"gene_name": "MALAT1", "count": 4821, "is_hvg": true},
+                {"gene_name": "ACTB", "count": 2987, "is_hvg": false}
+            ]
+        }"#;
+        let parsed: FilterableRow = serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed.columns.len(), 3);
+        assert_eq!(parsed.columns[0].key, "gene_name");
+        assert_eq!(parsed.columns[0].col_type, ColumnType::String);
+        assert_eq!(parsed.columns[1].col_type, ColumnType::Number);
+        assert_eq!(parsed.columns[2].col_type, ColumnType::Boolean);
+        assert_eq!(parsed.rows.len(), 2);
+        // Roundtrip: serializing back produces equivalent JSON
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        check_eq_json(&serialized, json_str);
     }
 }
